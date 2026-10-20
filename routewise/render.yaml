@@ -1,0 +1,79 @@
+# RouteWise — Render Blueprint (free plan friendly, one service)
+#
+# This file deploys the whole product as ONE web service:
+#   • Fastify API under /api/*, /healthz, /readyz
+#   • the built React app everywhere else (SERVE_WEB=true)
+#
+# Why one service: Render's free plan has no pre-deploy command and no shell
+# access, so the API applies its own migrations and seeds a fresh database on
+# first boot (AUTO_SETUP=true). One origin also means no CORS configuration.
+#
+# Render will ask for the two sync:false values while creating the Blueprint:
+#   NOMINATIM_USER_AGENT   — must contain a real contact (email or URL)
+#   TRANSITOUS_USER_AGENT  — same; Transitous requires identifying traffic
+
+services:
+  - type: web
+    name: routewise
+    runtime: node
+    plan: free
+    region: frankfurt
+    # Builds shared -> API -> web. The web build has an empty API base URL, so
+    # the browser calls /api/* on the same origin.
+    buildCommand: npm ci --include=dev && npm run build:render
+    startCommand: npm run start
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
+      # --- data -----------------------------------------------------------
+      - key: DATABASE_URL
+        fromDatabase:
+          name: routewise-db
+          property: connectionString
+      # Render Postgres requires TLS for connections from a web service.
+      - key: DATABASE_SSL
+        value: "true"
+      - key: AUTO_MIGRATE
+        value: "true"
+      - key: AUTO_SETUP
+        value: "true"
+      # --- hosting --------------------------------------------------------
+      - key: SERVE_WEB
+        value: "true"
+      - key: WEB_DIST_DIR
+        value: apps/web/dist
+      - key: CORS_ORIGINS
+        value: "*"
+      # --- providers ------------------------------------------------------
+      - key: GEOCODING_PROVIDER
+        value: nominatim
+      # Nominatim policy: identify your app with a real contact address/URL.
+      - key: NOMINATIM_USER_AGENT
+        sync: false
+      - key: STREET_ROUTING_PROVIDER
+        value: osrm
+      - key: OSRM_BASE_URL
+        value: https://router.project-osrm.org
+      - key: TRANSIT_PROVIDER
+        value: transitous
+      - key: TRANSITOUS_USER_AGENT
+        sync: false
+      - key: FX_PROVIDER
+        value: open_er_api
+      # --- secrets and limits --------------------------------------------
+      - key: DEVICE_HASH_SALT
+        generateValue: true
+      - key: MODERATION_TOKEN
+        generateValue: true
+      - key: REPORT_MIN_INTERVAL_SECONDS
+        value: "60"
+
+databases:
+  - name: routewise-db
+    plan: free
+    region: frankfurt
+    postgresMajorVersion: "16"
