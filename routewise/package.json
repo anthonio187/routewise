@@ -1,0 +1,32 @@
+{
+  "name": "routewise",
+  "version": "0.1.0",
+  "private": true,
+  "description": "RouteWise \u2014 a global, community-powered transport & mobility platform.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20 <23"
+  },
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c blue,green \"npm:dev:api\" \"npm:dev:web\"",
+    "dev:api": "npm run dev -w @routewise/api",
+    "dev:web": "npm run dev -w @routewise/web",
+    "build": "npm run build -w @routewise/api && npm run build -w @routewise/web",
+    "typecheck": "npm run typecheck -w @routewise/shared && npm run typecheck -w @routewise/api && npm run typecheck -w @routewise/web",
+    "test": "npm run test -w @routewise/api && npm run test -w @routewise/web",
+    "db:migrate": "npm run db:migrate -w @routewise/api",
+    "db:seed": "npm run seed -w @routewise/api --",
+    "ingest:gtfs": "npm run ingest:gtfs -w @routewise/api --",
+    "seed:cities": "npm run seed:cities -w @routewise/api --",
+    "build:render": "npm run build -w @routewise/api && VITE_API_BASE_URL= npm run build -w @routewise/web",
+    "start": "npm run start -w @routewise/api",
+    "setup:db": "npm run db:migrate && npm run db:seed"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}
