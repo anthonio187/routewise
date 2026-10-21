@@ -1,0 +1,22 @@
+{
+  "name": "RouteWise — global journey planning",
+  "short_name": "RouteWise",
+  "description": "Plan journeys, compare real fares and share transport updates anywhere in the world.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#f7f8fa",
+  "theme_color": "#111924",
+  "categories": ["travel", "navigation", "utilities"],
+  "icons": [
+    { "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" },
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable" },
+    { "src": "/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ],
+  "shortcuts": [
+    { "name": "Plan a journey", "url": "/", "description": "Open the planner" },
+    { "name": "Explore cities", "url": "/explore", "description": "Browse real cities and coverage" },
+    { "name": "Community reports", "url": "/reports", "description": "See traveller reports" }
+  ]
+}
