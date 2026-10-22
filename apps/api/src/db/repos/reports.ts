@@ -140,7 +140,9 @@ export async function listReports(filters: {
      WHERE ($1::uuid IS NULL OR r.city_id = $1::uuid)
        AND ($2::uuid IS NULL OR r.route_id = $2::uuid)
        AND ($3::text IS NULL OR r.category = $3)
-       AND ($4::text IS NULL OR r.status = $4)
+       -- Rejected reports are withdrawn by moderation: they never appear in a
+       -- public listing. Moderators can still ask for them explicitly.
+       AND (CASE WHEN $4::text IS NULL THEN r.status <> 'rejected' ELSE r.status = $4 END)
        AND r.expires_at > now()
        AND ($5::float8 IS NULL OR ST_Intersects(
              r.location::geometry,
