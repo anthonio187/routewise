@@ -101,15 +101,20 @@ export async function findCitiesForSearch(
             ST_X(c.center::geometry) AS center_lng,
             c.population, c.timezone,
             CASE WHEN $3::float8 IS NULL THEN NULL
-                 ELSE ST_Distance(c.center, ST_SetSRID(ST_MakePoint($4, $3), 4326)::geography)
-            END AS distance_m
+                 ELSE ST_Distance(c.center, ST_SetSRID(ST_MakePoint($4::float8, $3::float8), 4326)::geography)
+            END AS distance_m,
+            (c.name ILIKE $1::text || '%' OR c.ascii_name ILIKE $1::text || '%') AS is_prefix
      FROM cities c
      JOIN countries co ON co.id = c.country_id
      WHERE c.name ILIKE $1::text || '%' OR c.ascii_name ILIKE $1::text || '%'
         OR c.name ILIKE '%' || $1::text || '%' OR c.ascii_name ILIKE '%' || $1::text || '%'
-     ORDER BY (c.name ILIKE $1::text || '%' OR c.ascii_name ILIKE $1::text || '%') DESC,
+     -- PostgreSQL only accepts a bare output alias in ORDER BY, never an alias
+     -- inside an expression, so the CASE is written out again here.
+     ORDER BY is_prefix DESC,
               c.population DESC NULLS LAST,
-              COALESCE(distance_m, 0) ASC,
+              CASE WHEN $3::float8 IS NULL THEN 0
+                   ELSE ST_Distance(c.center, ST_SetSRID(ST_MakePoint($4::float8, $3::float8), 4326)::geography)
+              END ASC,
               c.name ASC
      LIMIT $2`,
     [term, limit, near?.lat ?? null, near?.lng ?? null],

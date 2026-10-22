@@ -80,18 +80,25 @@ export class NominatimProvider implements GeocodingProvider {
     const cached = this.cache.get(key);
     if (cached) return cached;
 
-    let places: Place[] = [];
-    if (options.near) {
-      // Pass 1: nearby only (~25 km). Pass 2: the wider world, ranked towards
-      // the same area, so a miss locally still finds the place globally.
-      places = await this.request(query, options, { bounded: true, degrees: 0.25 });
-      if (places.length === 0) {
-        places = await this.request(query, options, { bounded: false, degrees: 0.6 });
-      }
-    } else {
-      places = await this.request(query, options, null);
+    if (!options.near) {
+      const places = await this.request(query, options, null);
+      this.cache.set(key, places);
+      return places;
     }
 
+    // Proximity search. Nominatim's viewbox only nudges the ranking of a
+    // free-form query, which is why "post office" used to return one on the
+    // other side of the planet. Two requests are issued: the plain term, and
+    // the term qualified with the nearest city name ("market Maiduguri"),
+    // which is what actually surfaces local POIs. Both are subject to the
+    // same 1 request/second limit.
+    const cityName = await nearestCityName(options.near);
+    const [plain, localised] = await Promise.all([
+      this.request(query, options, { bounded: false, degrees: 0.3 }),
+      cityName ? this.request(`${query} ${cityName}`, options, null).catch(() => []) : Promise.resolve([]),
+    ]);
+
+    const places = rankByDistance(dedupe([...localised, ...plain]), options.near);
     this.cache.set(key, places);
     return places;
   }
@@ -173,4 +180,55 @@ function mapPlace(item: NominatimPlace): Place {
       boundingbox: item.boundingbox,
     },
   };
+}
+
+/** Straight-line distance in metres; enough for ranking suggestions. */
+function metresBetween(a: GeocodeOptions['near'], b: { lat: number; lng: number }): number {
+  if (!a) return Number.POSITIVE_INFINITY;
+  const R = 6_371_000;
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat);
+  const dLng = toRad(b.lng - a.lng);
+  const h =
+    Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function dedupe(places: Place[]): Place[] {
+  const seen = new Set<string>();
+  const out: Place[] = [];
+  for (const place of places) {
+    const key = `${place.name.toLowerCase()}|${place.location.lat.toFixed(4)}|${place.location.lng.toFixed(4)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(place);
+  }
+  return out;
+}
+
+/**
+ * Order results so that anything within 50 km of the traveller comes first,
+ * nearest first; everything else keeps the provider's own ranking. Results are
+ * never dropped — a global app must still find a place when nothing local
+ * matches, and the UI shows the country for each suggestion.
+ */
+function rankByDistance(places: Place[], near: GeocodeOptions['near']): Place[] {
+  const local = places
+    .map((place) => ({ place, metres: metresBetween(near, place.location) }))
+    .filter((entry) => entry.metres <= 50_000)
+    .sort((a, b) => a.metres - b.metres)
+    .map((entry) => entry.place);
+  const rest = places.filter((place) => !local.includes(place));
+  return [...local, ...rest];
+}
+
+/** Nearest seeded city, used to qualify POI queries by locality. */
+async function nearestCityName(near: { lat: number; lng: number }): Promise<string | null> {
+  try {
+    const { findNearestCity } = await import('../../db/repos/cities.js');
+    const city = await findNearestCity(near.lat, near.lng, 60);
+    return city?.name ?? null;
+  } catch {
+    return null;
+  }
 }

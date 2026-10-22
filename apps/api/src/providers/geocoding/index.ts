@@ -45,7 +45,12 @@ class GeocodingService implements GeocodingProvider {
         console.warn(`[geocoding:${this.delegate.name}] ${String(err)}`);
         return [] as Place[];
       }),
-      this.localPlaces(query, options).catch(() => [] as Place[]),
+      this.localPlaces(query, options).catch((err) => {
+        // A failure here must not hide external results, but it must be
+        // visible: silently losing local cities made place search look broken.
+        console.warn(`[geocoding:local] ${String(err)}`);
+        return [] as Place[];
+      }),
     ]);
 
     const merged: Place[] = [];
