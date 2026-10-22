@@ -7,7 +7,7 @@ import { browserTimeZone, formatDateTime } from '../lib/format';
 import { decodePlanFragment, localSavedStore } from '../lib/storage';
 import { useSettings } from '../lib/theme';
 import { JourneyCard } from '../components/JourneyCard';
-import { MapView } from '../components/MapView';
+import { MapPanel } from '../components/MapPanel';
 import { Icon } from '../components/Icon';
 
 export function SharePage() {
@@ -194,7 +194,7 @@ export function SharePage() {
           ))}
         </div>
         <div className="space-y-3 lg:col-span-5">
-          <MapView plan={plan} journey={selected} units={settings.units ?? 'metric'} />
+          <MapPanel plan={plan} journey={selected} units={settings.units ?? 'metric'} />
           <div className="rounded-xl border border-line bg-surface p-3 text-[11px] leading-relaxed text-ink-500">
             <p className="font-semibold text-ink-700">{t('share.footerTitle')}</p>
             <p className="mt-1">{t('footer.dataNote')}</p>

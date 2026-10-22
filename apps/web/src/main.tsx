@@ -12,6 +12,22 @@ import { applyInitialTheme } from './lib/theme';
 // Apply the stored theme before the first paint to avoid a flash.
 applyInitialTheme();
 
+// Warm the map style during idle time. The style document (tiles, fonts,
+// sprite URLs) is the slowest single request before the first rendered tile,
+// and the planner only creates the map after the first search.
+window.setTimeout(() => {
+  const style =
+    (import.meta.env.VITE_MAP_STYLE_URL as string | undefined) ??
+    'https://tiles.openfreemap.org/styles/liberty';
+  void fetch(style, { mode: 'cors', credentials: 'omit' }).catch(() => undefined);
+}, 1200);
+
+// Fetch the lazily-split map chunk once the page is idle. It does not block
+// first paint, and it means the map appears the moment results arrive.
+window.setTimeout(() => {
+  void import('./components/MapView').catch(() => undefined);
+}, 2500);
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <ErrorBoundary>

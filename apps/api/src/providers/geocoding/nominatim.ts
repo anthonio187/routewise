@@ -35,11 +35,11 @@ export class NominatimProvider implements GeocodingProvider {
   private readonly limiter = new SpacingLimiter(Math.max(1000, config.NOMINATIM_MIN_INTERVAL_MS));
   private readonly cache = new TtlCache<Place[]>(10 * 60_000, 400);
 
-  async search(query: string, options: GeocodeOptions = {}): Promise<Place[]> {
-    const key = JSON.stringify([query.trim().toLowerCase(), options.language, options.near, options.countryCode, options.limit]);
-    const cached = this.cache.get(key);
-    if (cached) return cached;
-
+  private async request(
+    query: string,
+    options: GeocodeOptions,
+    bounds: { bounded: boolean; degrees: number } | null,
+  ): Promise<Place[]> {
     const params = new URLSearchParams({
       q: query,
       format: 'jsonv2',
@@ -48,13 +48,16 @@ export class NominatimProvider implements GeocodingProvider {
       'accept-language': options.language ?? 'en',
       dedupe: '1',
     });
-    if (options.near) {
-      // Rough viewbox (~0.6°) to prefer nearby matches without excluding global ones.
-      const d = 0.6;
+    if (bounds && options.near) {
+      const d = bounds.degrees;
       params.set(
         'viewbox',
         [options.near.lng - d, options.near.lat + d, options.near.lng + d, options.near.lat - d].join(','),
       );
+      // Nominatim only *ranks* by viewbox unless bounded=1. Restricting the
+      // first pass is what makes "post office" mean the one down the road
+      // rather than one in another country.
+      if (bounds.bounded) params.set('bounded', '1');
     }
     if (options.countryCode) params.set('countrycodes', options.countryCode.toLowerCase());
 
@@ -69,7 +72,26 @@ export class NominatimProvider implements GeocodingProvider {
       throw new Error(`Nominatim search failed: HTTP ${res.status}`);
     }
     const data = (await res.json()) as NominatimPlace[];
-    const places = data.map((item) => mapPlace(item));
+    return data.map((item) => mapPlace(item));
+  }
+
+  async search(query: string, options: GeocodeOptions = {}): Promise<Place[]> {
+    const key = JSON.stringify([query.trim().toLowerCase(), options.language, options.near, options.countryCode, options.limit]);
+    const cached = this.cache.get(key);
+    if (cached) return cached;
+
+    let places: Place[] = [];
+    if (options.near) {
+      // Pass 1: nearby only (~25 km). Pass 2: the wider world, ranked towards
+      // the same area, so a miss locally still finds the place globally.
+      places = await this.request(query, options, { bounded: true, degrees: 0.25 });
+      if (places.length === 0) {
+        places = await this.request(query, options, { bounded: false, degrees: 0.6 });
+      }
+    } else {
+      places = await this.request(query, options, null);
+    }
+
     this.cache.set(key, places);
     return places;
   }

@@ -72,6 +72,58 @@ export async function listCities(q?: string, limit = 60): Promise<CitySummary[]>
   return res.rows.map(mapCity);
 }
 
+/**
+ * Fast city lookup for the place-search dropdown.
+ *
+ * Prefix matches come first, then substring matches, both ordered by
+ * population, so typing "lag" in Nigeria offers Lagos before smaller namesakes.
+ * `near` adds distance as a tiebreaker when the query is ambiguous.
+ */
+export async function findCitiesForSearch(
+  q: string,
+  limit = 5,
+  near?: { lat: number; lng: number },
+): Promise<Array<{ id: string; name: string; countryCode: string; location: { lat: number; lng: number }; population: number | null; timezone: string }>> {
+  const term = q.trim();
+  if (term.length < 2) return [];
+  const res = await query<{
+    id: string;
+    name: string;
+    country_code: string;
+    center_lat: number;
+    center_lng: number;
+    population: number | null;
+    timezone: string;
+    distance_m: number | null;
+  }>(
+    `SELECT c.id, c.name, co.iso2 AS country_code,
+            ST_Y(c.center::geometry) AS center_lat,
+            ST_X(c.center::geometry) AS center_lng,
+            c.population, c.timezone,
+            CASE WHEN $3::float8 IS NULL THEN NULL
+                 ELSE ST_Distance(c.center, ST_SetSRID(ST_MakePoint($4, $3), 4326)::geography)
+            END AS distance_m
+     FROM cities c
+     JOIN countries co ON co.id = c.country_id
+     WHERE c.name ILIKE $1::text || '%' OR c.ascii_name ILIKE $1::text || '%'
+        OR c.name ILIKE '%' || $1::text || '%' OR c.ascii_name ILIKE '%' || $1::text || '%'
+     ORDER BY (c.name ILIKE $1::text || '%' OR c.ascii_name ILIKE $1::text || '%') DESC,
+              c.population DESC NULLS LAST,
+              COALESCE(distance_m, 0) ASC,
+              c.name ASC
+     LIMIT $2`,
+    [term, limit, near?.lat ?? null, near?.lng ?? null],
+  );
+  return res.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    countryCode: row.country_code,
+    location: { lat: Number(row.center_lat), lng: Number(row.center_lng) },
+    population: row.population,
+    timezone: row.timezone,
+  }));
+}
+
 export interface CitySearchOptions {
   q?: string;
   country?: string;

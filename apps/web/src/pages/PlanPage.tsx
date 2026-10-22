@@ -25,7 +25,8 @@ import { useSettings } from '../lib/theme';
 import { takePendingPlace } from '../lib/handoff';
 import { PlaceSearch } from '../components/PlaceSearch';
 import { JourneyCard } from '../components/JourneyCard';
-import { MapView } from '../components/MapView';
+import { MapPanel } from '../components/MapPanel';
+import { HeroMapPreview } from '../components/HeroMapPreview';
 import { Icon } from '../components/Icon';
 import { useToast } from '../components/Toast';
 import { InstallBanner } from '../components/InstallBanner';
@@ -122,6 +123,15 @@ export function PlanPage() {
   const [cities, setCities] = useState<CitySummary[]>([]);
   const [meta, setMeta] = useState<ApiMeta | null>(null);
   const [recents, setRecents] = useState<RecentPlace[]>(() => recentPlacesStore.all());
+  /**
+   * Rough area the traveller is in, used to rank search suggestions before a
+   * route endpoint is known. Filled from a previous plan, then from the device
+   * if location permission already exists (no prompt is raised here).
+   */
+  const [lastArea, setLastArea] = useState<{ lat: number; lng: number } | null>(() => {
+    const previous = lastPlanStore.get();
+    return previous?.origin?.location ? { ...previous.origin.location } : null;
+  });
   const [now, setNow] = useState(() => Date.now());
 
   const resultsRef = useRef<HTMLDivElement | null>(null);
@@ -196,6 +206,33 @@ export function PlanPage() {
     return () => window.clearInterval(timer);
   }, []);
 
+  // Ask for the coarse area only when the permission is already granted, so
+  // opening the planner never triggers a browser prompt.
+  useEffect(() => {
+    if (!('geolocation' in navigator) || !('permissions' in navigator)) return;
+    let cancelled = false;
+    navigator.permissions
+      .query({ name: 'geolocation' })
+      .then((status) => {
+        if (status.state !== 'granted' || cancelled) return;
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            if (cancelled) return;
+            setLastArea({
+              lat: position.coords.latitude,
+              lng: position.coords.longitude,
+            });
+          },
+          () => undefined,
+          { maximumAge: 10 * 60_000, timeout: 8000 },
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const requestLocation = useCallback(
     (target: 'origin' | 'destination') => {
       if (!('geolocation' in navigator)) {
@@ -203,31 +240,38 @@ export function PlanPage() {
         return;
       }
       setGeoState(target);
+      const apply = (place: Place) => {
+        if (target === 'origin') setOrigin(place);
+        else setDestination(place);
+      };
       navigator.geolocation.getCurrentPosition(
-        async (position) => {
+        (position) => {
           const { latitude, longitude } = position.coords;
-          let place: Place = {
+          // Put the coordinates in the field immediately — waiting for a
+          // reverse-geocode round trip made the button look broken. The
+          // readable address replaces them a moment later when it arrives.
+          apply({
             id: 'device-location',
             name: t('form.useMyLocation'),
-            displayName: `${latitude.toFixed(5)}, ${longitude.toFixed(5)}`,
+            displayName: `${t('form.useMyLocation')} · ${latitude.toFixed(5)}, ${longitude.toFixed(5)}`,
             location: { lat: latitude, lng: longitude },
             kind: 'coordinate',
             provider: 'device',
-          };
-          try {
-            const reversed = await api.reverse(latitude, longitude, locale);
-            if (reversed.place) place = reversed.place;
-          } catch {
-            // Reverse geocoding is optional; coordinates still work.
-          }
-          if (target === 'origin') setOrigin(place);
-          else setDestination(place);
+          });
           setGeoState('idle');
+          void api
+            .reverse(latitude, longitude, locale)
+            .then((reversed) => {
+              if (reversed.place) apply(reversed.place);
+            })
+            .catch(() => {
+              // Coordinates remain valid without an address.
+            });
         },
         (err) => {
           setGeoState(err.code === err.PERMISSION_DENIED ? 'denied' : 'error');
         },
-        { enableHighAccuracy: true, timeout: 12_000, maximumAge: 60_000 },
+        { enableHighAccuracy: true, timeout: 12_000, maximumAge: 30_000 },
       );
     },
     [locale, t],
@@ -252,6 +296,7 @@ export function PlanPage() {
           ...(settings.currency ? { currency: settings.currency } : {}),
         };
         const response = await api.plan(body);
+        setLastArea({ ...from.location });
         setPlan(response);
         setSelectedId(response.journeys[0]?.id ?? null);
         setDismissed(new Set());
@@ -383,7 +428,7 @@ export function PlanPage() {
       {/* ---------------- Hero + search ---------------- */}
       <section className="relative overflow-hidden rounded-3xl border border-line bg-gradient-to-br from-surface via-surface to-[rgb(var(--signal-100))] px-4 pb-5 pt-6 shadow-card sm:px-8 sm:pb-7 sm:pt-9">
         <div className="pointer-events-none absolute -right-16 -top-24 h-64 w-64 rounded-full bg-signal-200/40 blur-3xl" aria-hidden="true" />
-        <HeroArt />
+        <HeroMapPreview area={lastArea} />
         <div className="relative max-w-2xl">
           <span className="chip chip-ok">
             <Icon name="sparkles" size={13} />
@@ -416,7 +461,7 @@ export function PlanPage() {
                 placeholder={t('form.originPlaceholder')}
                 value={origin}
                 onChange={setOrigin}
-                near={destination?.location ?? null}
+                near={origin?.location ?? lastArea}
               />
               <div ref={destinationInputRef}>
                 <PlaceSearch
@@ -424,7 +469,7 @@ export function PlanPage() {
                   placeholder={t('form.destinationPlaceholder')}
                   value={destination}
                   onChange={setDestination}
-                  near={origin?.location ?? null}
+                  near={origin?.location ?? lastArea}
                 />
               </div>
             </div>
@@ -458,8 +503,10 @@ export function PlanPage() {
             </div>
           </div>
 
-          {geoState === 'denied' ? (
-            <p className="note-warn mt-2 text-xs">{t('form.locationDenied')}</p>
+          {geoState === 'denied' || geoState === 'error' ? (
+            <p className="note-warn mt-2 text-xs">
+              {geoState === 'denied' ? t('form.locationDenied') : t('form.locationUnavailable')}
+            </p>
           ) : null}
 
           <div className="mt-3 grid gap-3 sm:grid-cols-[auto_1fr_auto] sm:items-end">
@@ -858,7 +905,7 @@ export function PlanPage() {
             </div>
             <div className={`lg:col-span-5 ${mobileView === 'list' ? 'hidden lg:block' : ''}`}>
               <div className="space-y-3 lg:sticky lg:top-20">
-                <MapView plan={plan} journey={selectedJourney} units={units} />
+                <MapPanel plan={plan} journey={selectedJourney} units={units} />
                 <ProviderAttribution plan={plan} />
               </div>
             </div>
@@ -919,48 +966,3 @@ function ProviderAttribution({ plan }: { plan: PlanResponse }) {
   );
 }
 
-/**
- * Decorative hero artwork: an abstract route over a map grid. Purely
- * presentational (aria-hidden), hidden on small screens to keep the form first.
- */
-function HeroArt() {
-  return (
-    <svg
-      viewBox="0 0 320 200"
-      className="pointer-events-none absolute -right-4 top-1/2 hidden h-[210px] w-[330px] -translate-y-1/2 opacity-90 lg:block"
-      aria-hidden="true"
-      focusable="false"
-    >
-      <defs>
-        <linearGradient id="hero-route" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0%" stopColor="rgb(var(--signal-400))" />
-          <stop offset="100%" stopColor="rgb(var(--signal-600))" />
-        </linearGradient>
-        <pattern id="hero-grid" width="26" height="26" patternUnits="userSpaceOnUse">
-          <path d="M26 0H0v26" fill="none" stroke="rgb(var(--line))" strokeWidth="1" opacity="0.7" />
-        </pattern>
-      </defs>
-      <rect x="14" y="10" width="292" height="180" rx="22" fill="rgb(var(--surface))" stroke="rgb(var(--line))" />
-      <rect x="14" y="10" width="292" height="180" rx="22" fill="url(#hero-grid)" opacity="0.55" />
-      <path
-        d="M52 152c26-4 22-38 48-44s30 26 52 18 20-44 46-50 28 22 44 26"
-        fill="none"
-        stroke="url(#hero-route)"
-        strokeWidth="4"
-        strokeLinecap="round"
-        strokeDasharray="0.5 11"
-      />
-      <circle cx="52" cy="152" r="8" fill="rgb(var(--surface))" stroke="rgb(var(--signal-500))" strokeWidth="4" />
-      <circle cx="242" cy="102" r="8" fill="rgb(var(--surface))" stroke="rgb(var(--signal-500))" strokeWidth="4" />
-      <g transform="translate(232 26)">
-        <rect x="0" y="0" width="58" height="24" rx="12" fill="rgb(var(--ink-900))" />
-        <circle cx="13" cy="12" r="4" fill="rgb(var(--signal-400))" />
-        <rect x="22" y="9" width="26" height="6" rx="3" fill="rgb(var(--surface))" opacity="0.85" />
-      </g>
-      <g transform="translate(46 96)">
-        <rect x="0" y="0" width="46" height="24" rx="12" fill="rgb(var(--signal-100))" stroke="rgb(var(--signal-300))" />
-        <rect x="9" y="9" width="28" height="6" rx="3" fill="rgb(var(--signal-600))" />
-      </g>
-    </svg>
-  );
-}

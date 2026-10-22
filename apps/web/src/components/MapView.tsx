@@ -57,8 +57,19 @@ const MODE_KEYS: Record<string, string> = {
   other: 'mode.other',
 };
 
+/**
+ * Satellite imagery (Google-Maps-style aerial view). Esri World Imagery is a
+ * keyless raster service; MapLibre draws it underneath the style's labels, so
+ * the result is the familiar "hybrid" look: photographs plus street names.
+ * Attribution is displayed through the map's attribution control.
+ */
+const SATELLITE_TILES =
+  'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}';
+const SATELLITE_ATTRIBUTION = 'Imagery © Esri, Maxar, Earthstar Geographics';
+
 const THREE_D_KEY = 'routewise.map.3d';
 const POI_KEY = 'routewise.map.poi';
+const SATELLITE_KEY = 'routewise.map.satellite';
 
 function readPref(key: string, fallback: boolean): boolean {
   try {
@@ -85,6 +96,43 @@ function tileSourceId(map: MapLibreMap): string | null {
     if ((source as { type?: string }).type === 'vector') return id;
   }
   return null;
+}
+
+function firstSymbolLayerId(map: MapLibreMap): string | undefined {
+  return (map.getStyle()?.layers ?? []).find((layer) => layer.type === 'symbol')?.id;
+}
+
+/**
+ * Show or hide the aerial imagery. The raster layer is inserted directly below
+ * the first symbol layer so place and street labels stay readable on top of it.
+ */
+function applySatellite(map: MapLibreMap, enabled: boolean) {
+  if (!map.getStyle()) return;
+  if (enabled) {
+    if (!map.getSource('satellite')) {
+      map.addSource('satellite', {
+        type: 'raster',
+        tiles: [SATELLITE_TILES],
+        tileSize: 256,
+        maxzoom: 19,
+        attribution: SATELLITE_ATTRIBUTION,
+      });
+    }
+    if (!map.getLayer('satellite')) {
+      map.addLayer(
+        { id: 'satellite', type: 'raster', source: 'satellite', paint: { 'raster-opacity': 1 } },
+        firstSymbolLayerId(map),
+      );
+    }
+    // The photographs sit above the vector fills, so the basemap is simply
+    // covered; only the extruded buildings need switching off (they would
+    // float above the images).
+    if (map.getLayer('building-3d')) map.setLayoutProperty('building-3d', 'visibility', 'none');
+  } else {
+    if (map.getLayer('satellite')) map.removeLayer('satellite');
+    if (map.getSource('satellite')) map.removeSource('satellite');
+    if (map.getLayer('building-3d')) map.setLayoutProperty('building-3d', 'visibility', 'visible');
+  }
 }
 
 function applyPoiVisibility(map: MapLibreMap, visible: boolean) {
@@ -114,11 +162,16 @@ export function MapView({ plan, journey, units = 'metric' }: Props) {
 
   const [is3D, setIs3D] = useState(() => readPref(THREE_D_KEY, true));
   const [showPois, setShowPois] = useState(() => readPref(POI_KEY, true));
+  const [satellite, setSatellite] = useState(() => readPref(SATELLITE_KEY, false));
   const [expanded, setExpanded] = useState(false);
   const is3DRef = useRef(is3D);
   is3DRef.current = is3D;
   const showPoisRef = useRef(showPois);
   showPoisRef.current = showPois;
+  const satelliteRef = useRef(satellite);
+  satelliteRef.current = satellite;
+  /** The first fit after the style loads must not animate — the map is still empty. */
+  const firstFitRef = useRef(true);
 
   const formatDistance = useCallback(
     (meters: number) => {
@@ -206,6 +259,7 @@ export function MapView({ plan, journey, units = 'metric' }: Props) {
           },
         });
       }
+      applySatellite(map, satelliteRef.current);
       applyPoiVisibility(map, showPoisRef.current);
       renderRef.current();
     },
@@ -239,13 +293,9 @@ export function MapView({ plan, journey, units = 'metric' }: Props) {
       new maplibregl.ScaleControl({ maxWidth: 90, unit: units === 'imperial' ? 'imperial' : 'metric' }),
       'bottom-left',
     );
-    map.addControl(
-      new maplibregl.AttributionControl({
-        compact: true,
-        customAttribution: '© OpenStreetMap · OpenFreeMap · OpenMapTiles',
-      }),
-      'bottom-right',
-    );
+    // The style and the satellite source already carry their own required
+    // attribution; adding a duplicate line only covers the map on small screens.
+    map.addControl(new maplibregl.AttributionControl({ compact: true }), 'bottom-right');
 
     try {
       map.setSky({
@@ -262,12 +312,13 @@ export function MapView({ plan, journey, units = 'metric' }: Props) {
 
     const onLoad = () => {
       readyRef.current = true;
+      // installLayers() renders the journey, which fits the camera to it.
+      // Do not animate the pitch here: an easeTo() started right after
+      // fitBounds() puts the camera back at the old position, which is why the
+      // map used to stay zoomed out at the whole world. Pitch is applied after
+      // the fit, in render()'s moveend handler.
       installLayers(map);
-      applyPitch(map, is3DRef.current);
-      map.once('idle', () => {
-        const zoom = map.getZoom();
-        if (is3DRef.current && zoom >= 12.5) map.easeTo({ pitch: 55, duration: 700 });
-      });
+      firstFitRef.current = true;
     };
 
     if (map.isStyleLoaded()) onLoad();
@@ -381,6 +432,16 @@ export function MapView({ plan, journey, units = 'metric' }: Props) {
   }, [showPois]);
 
   useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !readyRef.current) return;
+    applySatellite(map, satellite);
+    writePref(SATELLITE_KEY, satellite);
+    // 3D tilt makes no sense over photographs.
+    if (satellite && map.getPitch() > 0) map.easeTo({ pitch: 0, duration: 400 });
+    if (!satellite) applyPitch(map, is3D);
+  }, [satellite, is3D, applyPitch]);
+
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setExpanded(false);
     };
@@ -463,14 +524,18 @@ export function MapView({ plan, journey, units = 'metric' }: Props) {
         hasPoint = true;
       }
     }
-    if (hasPoint) {
+    if (hasPoint && !bounds.isEmpty()) {
+      const first = firstFitRef.current;
+      firstFitRef.current = false;
       map.fitBounds(bounds as LngLatBoundsLike, {
         padding: { top: 90, bottom: 70, left: 50, right: 50 },
         maxZoom: 15.5,
-        duration: 700,
+        // The very first fit happens while the map is still painting its first
+        // tiles; animating it just delays usable content.
+        duration: first ? 0 : 700,
       });
       map.once('moveend', () => {
-        if (!is3DRef.current) return;
+        if (!is3DRef.current || satelliteRef.current) return;
         if (map.getZoom() >= 12.5) map.easeTo({ pitch: 55, duration: 600 });
       });
     }
@@ -512,6 +577,16 @@ export function MapView({ plan, journey, units = 'metric' }: Props) {
           <button type="button" className="rw-map-toggle pointer-events-auto" aria-pressed={is3D} onClick={() => setIs3D((value) => !value)} title={t('map.toggle3dHint')}>
             <Icon name="layers" size={12} />
             3D
+          </button>
+          <button
+            type="button"
+            className="rw-map-toggle pointer-events-auto"
+            aria-pressed={satellite}
+            onClick={() => setSatellite((value) => !value)}
+            title={t('map.satelliteHint')}
+          >
+            <Icon name="globe" size={12} />
+            {satellite ? t('map.satelliteOn') : t('map.satellite')}
           </button>
           <button type="button" className="rw-map-toggle pointer-events-auto" aria-pressed={showPois} onClick={() => setShowPois((value) => !value)} title={t('map.togglePoiHint')}>
             <Icon name="pin" size={12} />

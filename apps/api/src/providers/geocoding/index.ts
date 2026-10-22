@@ -36,26 +36,17 @@ class GeocodingService implements GeocodingProvider {
   }
 
   async search(query: string, options: GeocodeOptions = {}): Promise<Place[]> {
-    const external = await this.delegate.search(query, options).catch((err) => {
-      console.warn(`[geocoding:${this.delegate.name}] ${String(err)}`);
-      return [] as Place[];
-    });
-
-    let local: Place[] = [];
-    try {
-      const { searchStops } = await import('../../db/repos/stops.js');
-      const stops = await searchStops(query, options.limit ?? 8);
-      local = stops.map((stop) => ({
-        id: stop.id,
-        name: stop.name,
-        displayName: stop.code ? `${stop.name} (${stop.code})` : stop.name,
-        location: stop.location,
-        kind: 'stop' as const,
-        provider: 'routewise-local',
-      }));
-    } catch {
-      // Database unavailable — external results are still returned.
-    }
+    // The local city table (250 countries / 236k cities) answers in
+    // milliseconds and needs no rate limit, so it is queried in parallel with
+    // the external geocoder instead of after it. Cities are listed first: when
+    // someone types "Lagos", the real city is the expected answer.
+    const [external, local] = await Promise.all([
+      this.delegate.search(query, options).catch((err) => {
+        console.warn(`[geocoding:${this.delegate.name}] ${String(err)}`);
+        return [] as Place[];
+      }),
+      this.localPlaces(query, options).catch(() => [] as Place[]),
+    ]);
 
     const merged: Place[] = [];
     const seen = new Set<string>();
@@ -70,6 +61,42 @@ class GeocodingService implements GeocodingProvider {
 
   async reverse(location: LatLng, language?: string): Promise<Place | null> {
     return this.delegate.reverse(location, language);
+  }
+
+  /**
+   * Cities and transit stops already in the local database. Both are real
+   * records (GeoNames / ingested GTFS), never placeholders, and they are what
+   * make the search box feel instant.
+   */
+  private async localPlaces(query: string, options: GeocodeOptions): Promise<Place[]> {
+    const limit = options.limit ?? 8;
+    const [cities, stops] = await Promise.all([
+      import('../../db/repos/cities.js').then(({ findCitiesForSearch }) =>
+        findCitiesForSearch(query, Math.min(limit, 5), options.near),
+      ),
+      import('../../db/repos/stops.js').then(({ searchStops }) => searchStops(query, limit)),
+    ]);
+
+    return [
+      ...cities.map((city) => ({
+        id: `city:${city.id}`,
+        name: city.name,
+        displayName: `${city.name}, ${city.countryCode}`,
+        location: city.location,
+        kind: 'city' as const,
+        provider: 'routewise-local',
+        countryCode: city.countryCode,
+        cityName: city.name,
+      })),
+      ...stops.map((stop) => ({
+        id: stop.id,
+        name: stop.name,
+        displayName: stop.code ? `${stop.name} (${stop.code})` : stop.name,
+        location: stop.location,
+        kind: 'stop' as const,
+        provider: 'routewise-local',
+      })),
+    ];
   }
 }
 
