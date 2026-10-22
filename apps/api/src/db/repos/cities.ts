@@ -56,7 +56,7 @@ export async function listCities(q?: string, limit = 60): Promise<CitySummary[]>
        ORDER BY c.population DESC NULLS LAST, c.name ASC
        LIMIT $2
      )
-     SELECT c.id, c.name, c.slug, c.timezone, c.default_currency,
+     SELECT c.id, c.name, c.slug, c.timezone, c.default_currency, c.population,
             co.iso2 AS country_code,
             ST_Y(c.center::geometry) AS center_lat,
             ST_X(c.center::geometry) AS center_lng,

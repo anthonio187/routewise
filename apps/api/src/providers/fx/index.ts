@@ -143,6 +143,16 @@ class FxService {
     };
   }
 
+  /** Every rate available for `base`, with the identity rate for the base itself. */
+  async allRates(base: string): Promise<Record<string, { rate: number; asOf: string }>> {
+    const baseUpper = base.toUpperCase();
+    const rates = await this.ratesFor(baseUpper);
+    if (!rates[baseUpper]) {
+      rates[baseUpper] = { rate: 1, asOf: new Date().toISOString() };
+    }
+    return rates;
+  }
+
   /** Convert a fare for display. Returns null rather than guessing when no rate exists. */
   async convert(
     amount: number,

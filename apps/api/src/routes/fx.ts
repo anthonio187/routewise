@@ -7,19 +7,24 @@ export async function fxRoutes(app: FastifyInstance) {
     if (!/^[A-Z]{3}$/.test(base)) {
       return reply.status(400).send({ error: 'bad_request', message: 'base must be an ISO 4217 code' });
     }
-    const symbols = (req.query.symbols ?? 'USD,EUR,GBP,NGN,KES,GHS,INR,BRL,SGD,JPY,ZAR,AED')
+    // No hardcoded currency list: callers may ask for specific symbols, but by
+    // default every currency the provider knows about is returned so that any
+    // itinerary currency can be converted.
+    const requested = (req.query.symbols ?? '')
       .split(',')
       .map((symbol) => symbol.trim().toUpperCase())
       .filter((symbol) => /^[A-Z]{3}$/.test(symbol))
-      .slice(0, 30);
+      .slice(0, 60);
 
+    const all = await fxService.allRates(base);
     const rates: Record<string, { rate: number; asOf: string } | null> = {};
-    await Promise.all(
-      symbols.map(async (symbol) => {
-        const rate = await fxService.getRate(base, symbol);
-        rates[symbol] = rate ? { rate: rate.rate, asOf: rate.asOf } : null;
-      }),
-    );
+    if (requested.length > 0) {
+      for (const symbol of requested) {
+        rates[symbol] = all[symbol] ?? null;
+      }
+    } else {
+      Object.assign(rates, all);
+    }
     return reply.send({
       base,
       provider: fxService.name,

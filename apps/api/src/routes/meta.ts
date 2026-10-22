@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { dbEnabled, query } from '../db/pool.js';
-import { listCities, searchCities } from '../db/repos/cities.js';
+import { searchCities } from '../db/repos/cities.js';
 import { searchStops } from '../db/repos/stops.js';
 import { listSourcesWithCoverage } from '../db/repos/sources.js';
 import { buildMeta } from '../planner/index.js';
@@ -65,19 +65,16 @@ export async function metaRoutes(app: FastifyInstance) {
     const limit = Math.min(Number(req.query.limit ?? 60) || 60, 200);
     const offset = Math.max(Number(req.query.offset ?? 0) || 0, 0);
 
-    if (req.query.country || req.query.hasTransit || req.query.offset) {
-      const result = await searchCities({
-        q: req.query.q,
-        country: req.query.country,
-        hasTransit: req.query.hasTransit === '1' || req.query.hasTransit === 'true',
-        limit,
-        offset,
-      });
-      return { cities: result.cities, total: result.total };
-    }
-
-    const cities = await listCities(req.query.q, limit);
-    return { cities, total: cities.length };
+    // Always paginate: the caller shows `total` next to the results, so it has
+    // to be the size of the whole (filtered) city set, not the page size.
+    const result = await searchCities({
+      q: req.query.q,
+      country: req.query.country,
+      hasTransit: req.query.hasTransit === '1' || req.query.hasTransit === 'true',
+      limit,
+      offset,
+    });
+    return { cities: result.cities, total: result.total };
   });
 
   /**
