@@ -8,6 +8,12 @@ actually see on the ground — wherever real data exists.
 with PostGIS. Free instances sleep after 15 minutes idle, so the first visit can take up to a minute
 to wake.
 
+The map has two modes: the drawn OpenStreetMap basemap (with extruded buildings in 3D) and
+**Satellite**, real aerial imagery from Esri World Imagery with street labels on top. Place search
+is local-first — the 236k-city gazetteer and any ingested stops answer instantly, and results are
+ranked by real distance, so searching "market" in Maiduguri finds the city's markets rather than
+one on another continent.
+
 > **Real data only.** RouteWise does not invent routes, schedules or fares. When an area has
 > no transit coverage it says so, still offers walking/cycling options where possible, and
 > lets travellers contribute information. A seeded city is *not* a coverage claim.
