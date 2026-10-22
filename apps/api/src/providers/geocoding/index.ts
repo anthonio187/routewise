@@ -61,6 +61,34 @@ class GeocodingService implements GeocodingProvider {
       seen.add(key);
       merged.push(place);
     }
+
+    // With a known position, anything close by must win: a market 2 km away is
+    // a better answer than a town called "Market Harborough" 5,000 km away,
+    // even though both match the text. Beyond 50 km the original order stands.
+    if (options.near) {
+      const near = options.near;
+      const metres = (place: Place) => {
+        const R = 6_371_000;
+        const toRad = (deg: number) => (deg * Math.PI) / 180;
+        const dLat = toRad(place.location.lat - near.lat);
+        const dLng = toRad(place.location.lng - near.lng);
+        const h =
+          Math.sin(dLat / 2) ** 2 +
+          Math.cos(toRad(near.lat)) * Math.cos(toRad(place.location.lat)) * Math.sin(dLng / 2) ** 2;
+        return 2 * R * Math.asin(Math.sqrt(h));
+      };
+      const ranked = merged
+        .map((place) => ({ place, distance: metres(place) }))
+        .sort((a, b) => {
+          const aClose = a.distance <= 50_000 ? 0 : 1;
+          const bClose = b.distance <= 50_000 ? 0 : 1;
+          if (aClose !== bClose) return aClose - bClose;
+          return aClose === 0 ? a.distance - b.distance : 0;
+        })
+        .map((entry) => entry.place);
+      return ranked.slice(0, options.limit ?? 8);
+    }
+
     return merged.slice(0, options.limit ?? 8);
   }
 

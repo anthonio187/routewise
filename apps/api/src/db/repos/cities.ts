@@ -129,6 +129,31 @@ export async function findCitiesForSearch(
   }));
 }
 
+/**
+ * Nearest city plus its country name, used to qualify POI searches locally
+ * ("market" -> "market Maiduguri Nigeria"). Returns null when nothing seeded
+ * is within `maxKm`, so a far-away city is never used to skew a search.
+ */
+export async function findNearestCityWithCountry(
+  lat: number,
+  lng: number,
+  maxKm = 60,
+): Promise<{ name: string; countryName: string; countryCode: string } | null> {
+  const res = await query<{ name: string; country_name: string; iso2: string; distance_m: number }>(
+    `SELECT c.name, co.name AS country_name, co.iso2,
+            ST_Distance(c.center, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography) AS distance_m
+     FROM cities c
+     JOIN countries co ON co.id = c.country_id
+     WHERE ST_DWithin(c.center, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography, $3)
+     ORDER BY distance_m ASC
+     LIMIT 1`,
+    [lat, lng, maxKm * 1000],
+  );
+  const row = res.rows[0];
+  if (!row) return null;
+  return { name: row.name, countryName: row.country_name, countryCode: row.iso2 };
+}
+
 export interface CitySearchOptions {
   q?: string;
   country?: string;

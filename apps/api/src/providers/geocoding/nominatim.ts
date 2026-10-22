@@ -92,10 +92,12 @@ export class NominatimProvider implements GeocodingProvider {
     // the term qualified with the nearest city name ("market Maiduguri"),
     // which is what actually surfaces local POIs. Both are subject to the
     // same 1 request/second limit.
-    const cityName = await nearestCityName(options.near);
+    const locality = await nearestLocality(options.near);
     const [plain, localised] = await Promise.all([
       this.request(query, options, { bounded: false, degrees: 0.3 }),
-      cityName ? this.request(`${query} ${cityName}`, options, null).catch(() => []) : Promise.resolve([]),
+      locality
+        ? this.request(`${query} ${locality.name} ${locality.countryName}`, options, null).catch(() => [])
+        : Promise.resolve([]),
     ]);
 
     const places = rankByDistance(dedupe([...localised, ...plain]), options.near);
@@ -222,12 +224,18 @@ function rankByDistance(places: Place[], near: GeocodeOptions['near']): Place[] 
   return [...local, ...rest];
 }
 
-/** Nearest seeded city, used to qualify POI queries by locality. */
-async function nearestCityName(near: { lat: number; lng: number }): Promise<string | null> {
+/**
+ * Nearest seeded city for the point, used to qualify POI queries by locality.
+ * The country name is included because bare city names are ambiguous: "post
+ * office Berlin" alone matches a street in Massachusetts.
+ */
+async function nearestLocality(
+  near: { lat: number; lng: number },
+): Promise<{ name: string; countryName: string } | null> {
   try {
-    const { findNearestCity } = await import('../../db/repos/cities.js');
-    const city = await findNearestCity(near.lat, near.lng, 60);
-    return city?.name ?? null;
+    const { findNearestCityWithCountry } = await import('../../db/repos/cities.js');
+    const city = await findNearestCityWithCountry(near.lat, near.lng, 60);
+    return city ? { name: city.name, countryName: city.countryName } : null;
   } catch {
     return null;
   }
