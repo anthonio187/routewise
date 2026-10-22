@@ -1,5 +1,7 @@
 import { access } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
@@ -18,6 +20,28 @@ import { planRoutes } from './routes/plan.js';
 import { reportRoutes } from './routes/reports.js';
 import { userRoutes } from './routes/user.js';
 import { fxRoutes } from './routes/fx.js';
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+
+/**
+ * Locate the built web app.
+ *
+ * `WEB_DIST_DIR` is relative to the repository root, but the process working
+ * directory is not always the root: `npm run start -w @routewise/api` (what
+ * Render runs) sets cwd to apps/api. Try the repository root derived from this
+ * file's location as well, and only accept a directory that has an index.html.
+ */
+function resolveWebRoot(): string | null {
+  const configured = config.WEB_DIST_DIR;
+  const candidates = path.isAbsolute(configured)
+    ? [configured]
+    : [
+        path.resolve(process.cwd(), configured),
+        path.resolve(here, '../../..', configured), // built: apps/api/dist -> repo root
+        path.resolve(here, '../../../..', configured), // tsx: apps/api/src -> repo root
+      ];
+  return candidates.find((candidate) => existsSync(path.join(candidate, 'index.html'))) ?? null;
+}
 
 export async function buildServer(): Promise<FastifyInstance> {
   const app = Fastify({
@@ -71,8 +95,9 @@ export async function buildServer(): Promise<FastifyInstance> {
   // to index.html for client-side routing.
   let servingWeb = false;
   if (config.SERVE_WEB) {
-    const root = path.resolve(process.cwd(), config.WEB_DIST_DIR);
+    const root = resolveWebRoot();
     try {
+      if (!root) throw new Error(`no index.html for WEB_DIST_DIR=${config.WEB_DIST_DIR}`);
       await access(path.join(root, 'index.html'));
       await app.register(fastifyStatic, {
         root,
@@ -94,7 +119,7 @@ export async function buildServer(): Promise<FastifyInstance> {
       app.log.info({ root }, 'serving built web app');
     } catch {
       app.log.warn(
-        { root },
+        { configured: config.WEB_DIST_DIR, cwd: process.cwd(), candidates: [process.cwd()] },
         'web build not found — run `npm run build` or set WEB_DIST_DIR; serving API only',
       );
     }

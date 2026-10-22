@@ -83,7 +83,22 @@ export async function runAutoSetup(log: Logger): Promise<SetupResult> {
       }
     }
 
-    if (cities === 0) {
+    // The city import is idempotent but not atomic across its batches: a deploy
+    // or restart can interrupt it. A completion marker makes the import
+    // resumable — it runs again until it has finished once.
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS setup_state (
+        key        text PRIMARY KEY,
+        value      text,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )`);
+
+    const marker = await pool.query<{ value: string }>(
+      "SELECT value FROM setup_state WHERE key = 'cities_seed'",
+    );
+    const citiesSeeded = marker.rows[0]?.value === 'complete';
+
+    if (!citiesSeeded) {
       const cityFile = await locateSeedFile('cities.csv.gz');
       if (!cityFile) {
         log.warn({}, 'db/seeds/cities.csv.gz not found; city search will be empty');
@@ -101,10 +116,21 @@ export async function runAutoSetup(log: Logger): Promise<SetupResult> {
         },
       });
       result.citiesImported = imported.imported;
+      const total = await pool.query<{ count: string }>('SELECT count(*) AS count FROM cities');
+      await pool.query(
+        `INSERT INTO setup_state (key, value) VALUES ('cities_seed', 'complete')
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()`,
+      );
       log.info(
-        { imported: imported.imported, seconds: (Date.now() - started) / 1000 },
+        {
+          imported: imported.imported,
+          citiesInDatabase: Number(total.rows[0]?.count ?? 0),
+          seconds: (Date.now() - started) / 1000,
+        },
         'global city reference imported',
       );
+    } else if (cities < 1000) {
+      log.warn({ cities }, 'city seed marked complete but the table is nearly empty');
     }
   } catch (err) {
     result.error = err instanceof Error ? err.message : String(err);
