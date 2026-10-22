@@ -130,9 +130,14 @@ export async function findCitiesForSearch(
 }
 
 /**
- * Nearest city plus its country name, used to qualify POI searches locally
- * ("market" -> "market Maiduguri Nigeria"). Returns null when nothing seeded
- * is within `maxKm`, so a far-away city is never used to skew a search.
+ * Prominent nearby city plus its country name, used to qualify POI searches
+ * locally ("market" -> "market Maiduguri Nigeria").
+ *
+ * Not simply the closest row: GeoNames lists city districts separately, so the
+ * nearest record to central Berlin is "Mitte", a name that appears in no
+ * address. Ranking by population weighted by distance picks the city people
+ * actually say — Berlin — while staying anchored to the traveller's position.
+ * Returns null when nothing seeded is within `maxKm`.
  */
 export async function findNearestCityWithCountry(
   lat: number,
@@ -140,13 +145,17 @@ export async function findNearestCityWithCountry(
   maxKm = 60,
 ): Promise<{ name: string; countryName: string; countryCode: string } | null> {
   const res = await query<{ name: string; country_name: string; iso2: string; distance_m: number }>(
-    `SELECT c.name, co.name AS country_name, co.iso2,
-            ST_Distance(c.center, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography) AS distance_m
-     FROM cities c
-     JOIN countries co ON co.id = c.country_id
-     WHERE ST_DWithin(c.center, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography, $3)
-     ORDER BY distance_m ASC
-     LIMIT 1`,
+    `SELECT c.name, co.name AS country_name, co.iso2, d.distance_m
+     FROM (
+       SELECT c.id, c.country_id, c.name,
+              ST_Distance(c.center, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography) AS distance_m
+       FROM cities c
+       WHERE ST_DWithin(c.center, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography, $3)
+       ORDER BY COALESCE(c.population, 0)::float8 / (1 + ST_Distance(c.center, ST_SetSRID(ST_MakePoint($2, $1), 4326)::geography) / 1000) DESC
+       LIMIT 1
+     ) d
+     JOIN cities c ON c.id = d.id
+     JOIN countries co ON co.id = c.country_id`,
     [lat, lng, maxKm * 1000],
   );
   const row = res.rows[0];
