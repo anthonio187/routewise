@@ -13,6 +13,22 @@ https://routewise-xxxx.onrender.com
 └── /readyz           readiness (db + providers)
 ```
 
+## 0. This deployment
+
+| | |
+|---|---|
+| App | <https://routewise-1sml.onrender.com> |
+| Service | Render web service `routewise` (`srv-dbcvjm7b9u1s73d22fp0`), free plan, Frankfurt |
+| Database | Render Postgres 16 `routewise-db` (`dpg-dbcvinui0phs73865jn0-a`), free plan, Frankfurt |
+| Deploys | Automatic on every push to `main` |
+| First boot | Migrations, then 250 countries + 236,353 cities (about 6 minutes on the free instance) |
+
+The service was created through the Render API rather than the Blueprint flow, with exactly the
+settings below; `render.yaml` remains the source of truth, so **New → Blueprint** reproduces the
+same stack from scratch. To redeploy after a change, push to `main` (or use *Manual Deploy* in the
+dashboard). The city import records completion in `setup_state`, so a restart or a mid-import
+deploy resumes rather than repeating the whole import.
+
 ## 1. Push and deploy (the short version)
 
 1. Push this repository to GitHub (branch `main`).

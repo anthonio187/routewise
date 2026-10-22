@@ -4,6 +4,10 @@
 compare fares across currencies, navigate transfers, share itineraries and report what you
 actually see on the ground — wherever real data exists.
 
+**Live:** <https://routewise-1sml.onrender.com> — one Render web service (Frankfurt) plus Postgres 16
+with PostGIS. Free instances sleep after 15 minutes idle, so the first visit can take up to a minute
+to wake.
+
 > **Real data only.** RouteWise does not invent routes, schedules or fares. When an area has
 > no transit coverage it says so, still offers walking/cycling options where possible, and
 > lets travellers contribute information. A seeded city is *not* a coverage claim.
